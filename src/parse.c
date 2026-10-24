@@ -170,8 +170,15 @@ static void PS_ParseInner(void)
             {
                 ps_enterloop = false;
                 M_NewLine();
-                M_AppendAction(204, ps_loopline);
-                M_AppendAction(246, ps_loopvalue);
+
+                // the engines run the batches again as many times as the tag of 246 says,
+                // after the first time (P_RestartMacro): loop(n) runs n times with n - 1
+                if(ps_loopvalue > 1)
+                {
+                    M_AppendAction(204, ps_loopline);
+                    M_AppendAction(246, ps_loopvalue - 1);
+                }
+
                 M_NewLine();
             }
             return;
@@ -194,6 +201,12 @@ static void PS_ParseInner(void)
             SC_ExpectNextToken(TK_LPAREN);
             SC_ExpectNextToken(TK_NUMBER);
             ps_loopvalue = SC_GetNumber();
+
+            if(ps_loopvalue < 1)
+            {
+                SC_Error("loop(%i): a loop runs once at least", ps_loopvalue);
+            }
+
             SC_ExpectNextToken(TK_RPAREN);
             SC_ExpectNextToken(TK_LBRACK);
             PS_ParseInner();

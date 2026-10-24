@@ -216,7 +216,7 @@ static m_decmp_table_t decmp_table[MAX_LINE_SPECIALS] =
     { NULL, 0 },                        // 14
     { NULL, 0 },                        // 15
     { "Door_CloseWait30Open", 1 },      // 16
-    { NULL, 0 },                        // 17
+    { "Start_Light_Strobing", 1 },      // 17
     { NULL, 0 },                        // 18
     { "Floor_Lower", 1 },               // 19
     { NULL, 0 },                        // 20
@@ -224,12 +224,12 @@ static m_decmp_table_t decmp_table[MAX_LINE_SPECIALS] =
     { "Plat_RaiseChange", 1 },          // 22
     { NULL, 0 },                        // 23
     { NULL, 0 },                        // 24
-    { "Ceiling_RaiseCrushOnce", 1 },    // 25
+    { "Ceiling_RaiseCrushSlow", 1 },    // 25
     { NULL, 0 },                        // 26
     { NULL, 0 },                        // 27
     { NULL, 0 },                        // 28
     { NULL, 0 },                        // 29
-    { "Floor_RaiseToNearest", 1 },      // 30
+    { "Floor_RaiseToTexture", 1 },      // 30
     { NULL, 0 },                        // 31
     { NULL, 0 },                        // 32
     { NULL, 0 },                        // 33
@@ -243,7 +243,7 @@ static m_decmp_table_t decmp_table[MAX_LINE_SPECIALS] =
     { NULL, 0 },                        // 41
     { NULL, 0 },                        // 42
     { "Ceiling_LowerToFloor", 1 },      // 43
-    { "Ceiling_RaiseCrush2", 1 },       // 44
+    { "Ceiling_LowerCrush", 1 },        // 44
     { NULL, 0 },                        // 45
     { NULL, 0 },                        // 46
     { NULL, 0 },                        // 47
@@ -265,8 +265,8 @@ static m_decmp_table_t decmp_table[MAX_LINE_SPECIALS] =
     { NULL, 0 },                        // 63
     { NULL, 0 },                        // 64
     { NULL, 0 },                        // 65
-    { "Plat_DownWaitUp24", 1 },         // 66
-    { "Plat_DownWaitUp32", 1 },         // 67
+    { "Plat_RaiseChange24", 1 },        // 66
+    { "Plat_RaiseChange32", 1 },        // 67
     { NULL, 0 },                        // 68
     { NULL, 0 },                        // 69
     { NULL, 0 },                        // 70
@@ -289,10 +289,10 @@ static m_decmp_table_t decmp_table[MAX_LINE_SPECIALS] =
     { NULL, 0 },                        // 87
     { NULL, 0 },                        // 88
     { NULL, 0 },                        // 89
-    { NULL, 0 },                        // 90
-    { NULL, 0 },                        // 91
-    { NULL, 0 },                        // 92
-    { "Thing_ModifyFlags", 1 },         // 93
+    { "Orange_Artifact_Switch", 1 },    // 90
+    { "Blue_Artifact_Switch", 1 },      // 91
+    { "Purple_Artifact_Switch", 1 },    // 92
+    { "Thing_NoInfighting", 1 },        // 93
     { "Thing_Alert", 1 },               // 94
     { NULL, 0 },                        // 95
     { NULL, 0 },                        // 96
@@ -318,13 +318,13 @@ static m_decmp_table_t decmp_table[MAX_LINE_SPECIALS] =
     { NULL, 0 },                        // 116
     { NULL, 0 },                        // 117
     { NULL, 0 },                        // 118
-    { "Floor_RaiseToNearest2", 1 },     // 119
+    { "Floor_RaiseToNearest", 1 },      // 119
     { NULL, 0 },                        // 120
     { "Plat_DownWaitUpFast", 1 },       // 121
     { "Plat_UpWaitDown", 1 },           // 122
     { "Plat_UpWaitDownFast", 1 },       // 123
     { "ExitToLevel", 1 },               // 124
-    { NULL, 0 },                        // 125
+    { "Teleport_Monsters_Only", 1 },    // 125
     { NULL, 0 },                        // 126
     { NULL, 0 },                        // 127
     { NULL, 0 },                        // 128
@@ -441,14 +441,14 @@ static m_decmp_table_t decmp_table[MAX_LINE_SPECIALS] =
     { "Plat_UpDownFastByValue", 2 },    // 239
     { "Line_TriggerRandomLinesByTag", 1 },  // 240
     { "Pillar_OpenByValue", 2 },        // 241
-    { "Thing_Dissolve", 1 },            // 242
+    { "Thing_FadeOut", 1 },             // 242
     { "Camera_MoveAndAim", 2 },         // 243
     { "Floor_SetHeight", 2 },           // 244
     { "Ceiling_SetHeight", 2 },         // 245
     { NULL, 0 },
     { "Floor_MoveByHeight", 2 },        // 247
     { "Macro_Suspend", 1 },             // 248                        
-    { "Teleport_Stomp", 1 },            // 249
+    { "Teleport_Silent", 1 },           // 249
     { "Macro_Enable", 1 },              // 250                        
     { "Macro_Disable", 1 },             // 251                        
     { "Ceiling_MoveByHeight", 2 },      // 252
@@ -636,7 +636,7 @@ void M_DecompileMacro(const char *file)
                 {
                     enterloop = true;
                     exitloopline = data[x].id;
-                    Com_FPrintf("    loop(%i)\n    {\n", data[x].tag);
+                    Com_FPrintf("    loop(%i)\n    {\n", data[x].tag + 1);
                 }
             }
 
