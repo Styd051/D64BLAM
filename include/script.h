@@ -98,6 +98,7 @@ typedef struct
 } scparser_t;
 
 extern scparser_t *sc_parsers[MAX_NESTED_PARSERS];
+extern int sc_numparsers;
 extern scparser_t *sc_parser;
 extern char sc_stringbuffer[256];
 extern dboolean verbose;

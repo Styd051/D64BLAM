@@ -24,6 +24,7 @@
 #define __BLAM_PARSE__
 
 extern char ps_userdirectory[256];
+dboolean PS_SetUserDirectory(const char *dir);
 void PS_ParseScript(void);
 
 #endif

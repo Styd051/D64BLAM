@@ -87,29 +87,27 @@ int main(int argc, char **argv)
         }
         else if(!strcmp(myargv[i], "-v"))
         {
-            verbose = true;
             debugfile = fopen("blamdebug.txt", "w");
+
+            if(debugfile == NULL)
+            {
+                Com_Error("Cannot write blamdebug.txt");
+            }
+
+            verbose = true;
         }
         else if(!strcmp(myargv[i], "-i"))
         {
-            int tail;
-
             if(!myargv[i+1])
             {
                 Com_Error("Option -i needs a directory");
             }
 
-            if(strlen(myargv[i+1]) >= sizeof(ps_userdirectory) - 1)
-            {
-                Com_Error("Directory of option -i too long: %s", myargv[i+1]);
-            }
+            i++;
 
-            sprintf(ps_userdirectory, "%s", myargv[++i]);
-            tail = strlen(ps_userdirectory)-1;
-
-            if(tail >= 0 && ps_userdirectory[tail] != '\\')
+            if(!PS_SetUserDirectory(myargv[i]))
             {
-                ps_userdirectory[tail+1] = '\\';
+                Com_Error("Directory of option -i too long: %s", myargv[i]);
             }
         }
         else

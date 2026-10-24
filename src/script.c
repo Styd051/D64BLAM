@@ -176,6 +176,11 @@ void SC_Close(void)
 void SC_Error(const char *msg, ...)
 {
     char buf[1024];
+    char names[256];
+    char *filename;
+    scparser_t *file;
+    int first;
+    int i;
     va_list v;
     
     va_start(v,msg);
@@ -183,9 +188,59 @@ void SC_Error(const char *msg, ...)
     va_end(v);
     buf[sizeof(buf)-1] = 0;
 
+    // in the text of a #define, the line given is the one of the file where the name is used,
+    // and the names the error went through are given after the message
+    file = sc_parser;
+    first = 0;
+
+    for(i = sc_numparsers - 1; i >= 0; i--)
+    {
+        if(sc_parsers[i]->identifier == NULL && !sc_parsers[i]->isamacro)
+        {
+            file = sc_parsers[i];
+            first = i + 1;
+            break;
+        }
+    }
+
+    names[0] = 0;
+
+    for(i = first; i < sc_numparsers; i++)
+    {
+        if(sc_parsers[i]->identifier == NULL)
+        {
+            continue;
+        }
+
+        if(strlen(names) + strlen(sc_parsers[i]->identifier->name) + 10 > sizeof(names))
+        {
+            strcat(names, " > ...");
+            break;
+        }
+
+        if(names[0])
+        {
+            strcat(names, " > ");
+        }
+
+        strcat(names, sc_parsers[i]->identifier->name);
+    }
+
+    filename = SC_GetNestedFilename();
+
+    if(file == NULL || filename == NULL)
+    {
+        Com_Error("%s", buf);
+    }
+
+    if(names[0])
+    {
+        Com_Error("%s : %s (in %s)\n(line = %i, pos = %i)",
+            filename, buf, names, file->linepos, file->rowpos);
+    }
+
     Com_Error("%s : %s\n(line = %i, pos = %i)",
-        SC_GetNestedFilename(),
-        buf, sc_parser->linepos, sc_parser->rowpos);
+        filename, buf, file->linepos, file->rowpos);
 }
 
 //
@@ -253,6 +308,21 @@ static void SC_ClearToken(void)
 {
     sc_parser->tokentype = TK_NONE;
     memset(sc_parser->token, 0, 512);
+}
+
+//
+// SC_TokenName
+// The word read, as a message gives it
+//
+
+static const char *SC_TokenName(void)
+{
+    if(sc_parser->tokentype == TK_NONE && sc_parser->token[0] == 0)
+    {
+        return "the end of the file";
+    }
+
+    return sc_parser->token;
 }
 
 //
@@ -445,13 +515,15 @@ void SC_MustMatchToken(int type)
         case TK_COMMA:
             string = "a comma";
             break;
+        case TK_IDENIFIER:
+            string = "a name";
+            break;
         default:
-            SC_Error("Invalid token: %s", sc_parser->token);
+            SC_Error("Invalid token: %s", SC_TokenName());
             break;
         }
 
-        SC_Error("Expected %s, but found: %s (%i : %i)",
-            string, sc_parser->token, sc_parser->tokentype, type);
+        SC_Error("Expected %s, but found: %s", string, SC_TokenName());
     }
 }
 
@@ -630,6 +702,11 @@ static void SC_GetStringToken(void)
     {
         if(sc_parser->buffpos >= sc_parser->buffsize)
         {
+            if(sc_parser->identifier != NULL || sc_parser->isamacro)
+            {
+                SC_Error("Unterminated string");
+            }
+
             SC_Error("Unterminated string, started at line %i", line);
         }
 
@@ -809,12 +886,85 @@ void SC_Rewind(void)
 }
 
 //
+// SC_Normalize
+// The text of a #define without its spaces at the start and at the end, and one space between words
+//
+
+static char *SC_Normalize(const char *text, int len)
+{
+    char *out;
+    dboolean space;
+    int i;
+    int o;
+
+    out = (char*)Com_Alloc(len + 1);
+    space = false;
+    o = 0;
+
+    for(i = 0; i < len; i++)
+    {
+        if((byte)text[i] <= ' ')
+        {
+            space = true;
+            continue;
+        }
+
+        if(space && o > 0)
+        {
+            out[o++] = ' ';
+        }
+
+        space = false;
+        out[o++] = text[i];
+    }
+
+    return out;
+}
+
+//
+// SC_SameIdentifier
+// The same values and the same text (spaces aside)
+//
+
+static dboolean SC_SameIdentifier(identifier_t *a, identifier_t *b)
+{
+    dboolean same;
+    char *texta;
+    char *textb;
+    int i;
+
+    if(a->has_args != b->has_args || a->numargs != b->numargs)
+    {
+        return false;
+    }
+
+    for(i = 0; i < a->numargs; i++)
+    {
+        if(strcmp(a->argnames[i], b->argnames[i]))
+        {
+            return false;
+        }
+    }
+
+    // the last byte of a text is the end mark
+    texta = SC_Normalize(a->buffer, a->bufsize - 1);
+    textb = SC_Normalize(b->buffer, b->bufsize - 1);
+    same = !strcmp(texta, textb);
+
+    Com_Free(&texta);
+    Com_Free(&textb);
+
+    return same;
+}
+
+//
 // SC_AddIdentifier
 //
 
 void SC_AddIdentifier(void)
 {
     identifier_t *id;
+    identifier_t *old;
     int len;
     int left;
     int used;
@@ -932,10 +1082,32 @@ void SC_AddIdentifier(void)
 
     id->buffer[len] = 127;
 
-    identifier_cap.prev->next = id;
-    id->next = &identifier_cap;
-    id->prev = identifier_cap.prev;
-    identifier_cap.prev = id;
+    // a name already defined: the same text again is fine (a file included twice), another one is not
+    for(old = identifier_cap.next; old != &identifier_cap; old = old->next)
+    {
+        if(!strcmp(old->name, id->name))
+        {
+            break;
+        }
+    }
+
+    if(old != &identifier_cap)
+    {
+        if(!SC_SameIdentifier(old, id))
+        {
+            SC_Error("%s is already defined (#undef it first)", id->name);
+        }
+
+        Com_Free(&id->buffer);
+        Com_Free(&id);
+    }
+    else
+    {
+        identifier_cap.prev->next = id;
+        id->next = &identifier_cap;
+        id->prev = identifier_cap.prev;
+        identifier_cap.prev = id;
+    }
 
     sc_parser->buffpos += used;
 
@@ -991,7 +1163,7 @@ void SC_PushIdStack(char *name)
 
     if(id_stack_count >= MAX_IDENTIFER_STACK_LEN)
     {
-        SC_Error("Stack overflowed\n");
+        SC_Error("Stack overflowed");
     }
 
     len = strlen(sc_parser->token);
@@ -1018,19 +1190,22 @@ void SC_PushIdStack(char *name)
 static void SC_PopIdStack(identifier_t *id,
                           identifer_stack_t *stack)
 {
-    int i;
+    int base = stack - id_stack;
+    int above;
 
-    for(i = 0; i < id->numargs; i++)
+    if(base < 0 || base + id->numargs > id_stack_count)
     {
-        if(id_stack_count <= 0)
-        {
-            SC_Error("Tried to pop an empty stack for identifier '%s'",
-                id->name);
-        }
-
-        id_stack_count--;
-        memset(id_stack[id_stack_count].value, 0, MAX_IDENTIFER_VALUE_LEN);
+        SC_Error("Tried to pop an empty stack for identifier '%s'",
+            id->name);
     }
+
+    // a #define that ends with a call ends while the values of the call are read:
+    // they are above its own values, and go down in their place
+    above = id_stack_count - (base + id->numargs);
+
+    memmove(&id_stack[base], &id_stack[base + id->numargs], above * sizeof(identifer_stack_t));
+    id_stack_count -= id->numargs;
+    memset(&id_stack[id_stack_count], 0, id->numargs * sizeof(identifer_stack_t));
 
     SC_DebugPrintf("pop id stack\n");
 }

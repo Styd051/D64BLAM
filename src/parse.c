@@ -33,8 +33,36 @@ static int ps_loopline;
 static int ps_loopvalue;
 static dboolean ps_enterloop;
 static int ps_macro;
+static int ps_tailnames;
 
 char ps_userdirectory[256];
+
+//
+// PS_SetUserDirectory
+// The folder of the files to include (option -i, #setdir), with a separator at its end;
+// false when it is too long
+//
+
+dboolean PS_SetUserDirectory(const char *dir)
+{
+    int len = strlen(dir);
+
+    if(len >= (int)sizeof(ps_userdirectory) - 1)
+    {
+        return false;
+    }
+
+    strcpy(ps_userdirectory, dir);
+
+    // a folder ending with / is fine on Windows too
+    if(len > 0 && dir[len - 1] != DIR_SEPARATOR && dir[len - 1] != '/')
+    {
+        ps_userdirectory[len] = DIR_SEPARATOR;
+        ps_userdirectory[len + 1] = 0;
+    }
+
+    return true;
+}
 
 //
 // PS_ParseIdentifier
@@ -43,6 +71,7 @@ char ps_userdirectory[256];
 void PS_ParseIdentifier(void)
 {
     identifer_stack_t *stack;
+    int depth = sc_numparsers;
 
     for(current_identifier = identifier_cap.next;
         current_identifier != &identifier_cap;
@@ -100,6 +129,26 @@ void PS_ParseIdentifier(void)
                 stack = NULL;
             }
 
+            // the word after the name ended the #define it is in: the name takes its place,
+            // so a name defined by itself would go on without end
+            if(sc_numparsers < depth)
+            {
+                if(++ps_tailnames > MAX_NESTED_PARSERS)
+                {
+                    SC_Error("%s is defined by itself", current_identifier->name);
+                }
+            }
+            else
+            {
+                ps_tailnames = 0;
+            }
+
+            // the values are the last ones on the stack (the #define that ended took its own away)
+            if(stack != NULL)
+            {
+                stack = &id_stack[id_stack_count - current_identifier->numargs];
+            }
+
             SC_PushParser();
 
             sc_parser->buffsize         = current_identifier->bufsize;
@@ -116,18 +165,6 @@ void PS_ParseIdentifier(void)
             sc_parser->name             = "identifier";
 
             return;
-        }
-        else if(sc_parser->stack != NULL && sc_parser->identifier != NULL)
-        {
-            int i;
-
-            for(i = 0; i < sc_parser->identifier->numargs; i++)
-            {
-                if(!strcmp(sc_parser->token, sc_parser->stack[i].value))
-                {
-                    return;
-                }
-            }
         }
     }
 
@@ -150,6 +187,8 @@ static void PS_ParseInner(void)
             break;
         case TK_EOF:
             return;
+        case TK_SEMICOLON:
+            break;
         case TK_NUMBER:
             {
                 int special;
@@ -241,6 +280,8 @@ static void PS_ParseOuter(void)
             break;
         case TK_EOF:
             return;
+        case TK_SEMICOLON:
+            break;
         case TK_IDENIFIER:
             PS_ParseIdentifier();
             break;
@@ -260,11 +301,15 @@ static void PS_ParseOuter(void)
                             SC_Error("Include path too long: %s%s", ps_userdirectory, sc_stringbuffer);
                         }
 
-                        SC_PushParser();
-
                         sprintf(includepath, "%s%s",
                             ps_userdirectory, sc_stringbuffer);
 
+                        if(Com_FileExists(includepath) != 1)
+                        {
+                            SC_Error("Cannot find the include file %s", includepath);
+                        }
+
+                        SC_PushParser();
                         SC_Open(includepath);
                         PS_ParseOuter();
                         SC_Close();
@@ -280,9 +325,19 @@ static void PS_ParseOuter(void)
                     break;
                 case TK_SETDIR:
                     SC_GetString();
-                    sprintf(ps_userdirectory, "%s", sc_parser->token);
+
+                    if(!PS_SetUserDirectory(sc_stringbuffer))
+                    {
+                        SC_Error("Directory too long: %s", sc_stringbuffer);
+                    }
                     break;
                 default:
+                    if(sc_parser->tokentype == TK_NONE)
+                    {
+                        SC_Error("Expected a directive after #, but found: the end of the file");
+                    }
+
+                    SC_Error("Unknown directive: #%s", sc_parser->token);
                     break;
                 }
             }
@@ -311,6 +366,7 @@ void PS_ParseScript(void)
     ps_loopline = 0;
     ps_loopvalue = 0;
     ps_enterloop = false;
+    ps_tailnames = 0;
 
     PS_ParseOuter();
 }
