@@ -23,7 +23,7 @@
 #ifndef __BLAM_MACRO__
 #define __BLAM_MACRO__
 
-#define MAX_MACRO_DATA  255
+#define MAX_MACRO_DATA  32767 // actions of a lump: the engines read their count in 16 bits
 #define MAX_MACRO_DEFS  256 // line specials 256 to 511
 
 typedef struct
@@ -36,7 +36,7 @@ typedef struct
 typedef struct
 {
 	short actions;
-	macrodata_t data[MAX_MACRO_DATA];
+	macrodata_t *data;
 } macrodef_t;
 
 extern macrodef_t macrodefs[MAX_MACRO_DEFS];

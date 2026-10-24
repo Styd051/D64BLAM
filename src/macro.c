@@ -37,6 +37,9 @@ int m_currentline;
 static int m_currentmacro;
 static dboolean m_defined[MAX_MACRO_DEFS];
 
+// the actions of every macro, one macro after the other
+static macrodata_t m_actiondata[MAX_MACRO_DATA];
+
 //
 // M_NewMacro
 //
@@ -57,6 +60,7 @@ void M_NewMacro(int id)
     m_currentmacro = id;
 
     activemacro = &macrodefs[id-1];
+    activemacro->data = &m_actiondata[m_totalactions];
     macroaction = macrodefs[id-1].data;
     activemacro->actions = 0;
     m_currentline = 10;
@@ -83,14 +87,16 @@ void M_AppendAction(int type, int tag)
         }
     }
 
-    if(activemacro->actions >= MAX_MACRO_DATA)
+    // N64 and remaster: the count of all the actions is 16 bits;
+    // Doom64 EX: the count of a macro + 1 is 16 bits
+    if(m_totalactions >= MAX_MACRO_DATA)
     {
-        SC_Error("Macro %i has more than %i actions", m_currentmacro, MAX_MACRO_DATA);
+        SC_Error("Too many actions in the script (%i at most)", MAX_MACRO_DATA);
     }
 
-    if(m_totalactions >= 32767)
+    if(activemacro->actions >= MAX_MACRO_DATA - 1)
     {
-        SC_Error("Too many actions in the script (32767 at most)");
+        SC_Error("Macro %i has more than %i actions", m_currentmacro, MAX_MACRO_DATA - 1);
     }
 
     // the number of a wait is 16 bits too
@@ -425,7 +431,7 @@ static m_decmp_table_t decmp_table[MAX_LINE_SPECIALS] =
     { "Floor_MoveByValueInstant", 2 },  // 229
     { "Line_CopySpecials", 2 },         // 230
     { "Thing_SpawnTracer", 1 },         // 231
-    { "Ceiling_RaiseCrushFast", 1 },    // 232
+    { "Ceiling_RaiseCrushOnceFast", 1 },// 232
     { "Player_Freeze", 1 },             // 233
     { "SetLightID", 2 },                // 234
     { "Sector_CopyLightsAndInterpolate", 2 },// 235
@@ -502,7 +508,38 @@ static dboolean M_CheckMacroLump(byte *buffer, int len)
 }
 
 //
+// M_FindLoop
+// The 246 that goes back to the batch line, after a 204 that gives it
+//
+
+static int M_FindLoop(macrodata_t *data, int start, int count, int line)
+{
+    int x;
+
+    for(x = start; x < count; x++)
+    {
+        if(data[x].special == 246 && x > 0 && data[x-1].tag == line)
+        {
+            return x;
+        }
+    }
+
+    return -1;
+}
+
+//
+// M_LastOfBatch
+// The action ends its batch: the engine waits for what the last action of a batch made, and for nothing else
+//
+
+static dboolean M_LastOfBatch(macrodata_t *data, int j, int count)
+{
+    return (j + 1 >= count || data[j+1].id != data[j].id);
+}
+
+//
 // M_DecompileMacro
+// What is written does what the lump does once compiled again
 //
 
 void M_DecompileMacro(const char *file)
@@ -539,6 +576,8 @@ void M_DecompileMacro(const char *file)
         int tag = 0;
         int exitloopline;
         dboolean enterloop;
+        dboolean waited;
+        dboolean known;
         macrodata_t *data;
 
         Com_FPrintf("//====================  macro %02d  ====================\n\n", i+1);
@@ -549,6 +588,8 @@ void M_DecompileMacro(const char *file)
         data = (macrodata_t*)Com_GetFileBuffer(buffer);
         enterloop = false;
         exitloopline = 0;
+        waited = false;     // the last thing written was a Delay, which waits
+        known = false;      // a 204 of this macro gave the value
 
         for(j = 0; j < numactions; j++)
         {
@@ -559,7 +600,11 @@ void M_DecompileMacro(const char *file)
 
             if(j > 0 && line != scriptline)
             {
-                if(spec != 203 && spec != 246)
+                dboolean closing = (enterloop && exitloopline == line);
+                dboolean opening = (!enterloop && M_FindLoop(data, j, numactions, line) >= 0);
+
+                // loop( and } make a new batch themselves
+                if(!waited && spec != 246 && !closing && !opening)
                 {
                     if(enterloop)
                     {
@@ -569,7 +614,7 @@ void M_DecompileMacro(const char *file)
                     Com_FPrintf("    wait;\n");
                 }
 
-                if(enterloop && exitloopline == line)
+                if(closing)
                 {
                     Com_FPrintf("    }");
                     enterloop = false;
@@ -585,18 +630,13 @@ void M_DecompileMacro(const char *file)
 
             if(!enterloop)
             {
-                for(x = j; x < numactions; x++)
+                x = M_FindLoop(data, j, numactions, line);
+
+                if(x >= 0)
                 {
-                    if(data[x].special == 246)
-                    {
-                        if(x > 0 && data[x-1].tag == line)
-                        {
-                            enterloop = true;
-                            exitloopline = data[x].id;
-                            Com_FPrintf("    loop(%i)\n    {\n", data[x].tag);
-                            break;
-                        }
-                    }
+                    enterloop = true;
+                    exitloopline = data[x].id;
+                    Com_FPrintf("    loop(%i)\n    {\n", data[x].tag);
                 }
             }
 
@@ -606,6 +646,20 @@ void M_DecompileMacro(const char *file)
             if(spec == 204)
             {
                 scriptvar = tag;
+                known = true;
+
+                // the batch ends with it, so the engine does not wait for the action before it
+                if(M_LastOfBatch(data, j, numactions))
+                {
+                    if(enterloop)
+                    {
+                        Com_FPrintf("    ");
+                    }
+
+                    Com_FPrintf("    PushVar(%i);\n", tag);
+                    waited = false;
+                }
+
                 continue;
             }
             else if(spec == 246)
@@ -619,8 +673,25 @@ void M_DecompileMacro(const char *file)
 
             table = (spec >= 0 && spec < MAX_LINE_SPECIALS) ? &decmp_table[spec] : NULL;
 
+            // Delay waits after the 203: only for a 203 that ends its batch;
+            // a value is given only by a 204 of this macro; a name without a tag cannot keep one
+            if(table != NULL && table->name != NULL &&
+                ((spec == 203 && !M_LastOfBatch(data, j, numactions)) ||
+                (table->args == 2 && !known) ||
+                (table->args == 0 && tag != 0)))
+            {
+                table = NULL;
+            }
+
+            waited = (table != NULL && spec == 203);
+
             if(table == NULL || table->name == NULL)
             {
+                if(enterloop)
+                {
+                    Com_FPrintf("    ");
+                }
+
                 Com_FPrintf("    %i : %i;\n", spec, tag);
             }
             else
