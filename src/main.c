@@ -62,19 +62,19 @@ int main(int argc, char **argv)
     if(!myargv[1])
     {
         Com_Printf("No input specified...");
-        return 0;
+        return 1;
     }
 
     if(!myargv[2])
     {
         Com_Printf("No output specified...");
-        return 0;
+        return 1;
     }
 
     SC_Init();
     M_Init();
 
-    memset(ps_userdirectory, 0, sizeof(*ps_userdirectory));
+    memset(ps_userdirectory, 0, sizeof(ps_userdirectory));
 
     decompile = false;
     i = 3;
@@ -94,10 +94,20 @@ int main(int argc, char **argv)
         {
             int tail;
 
+            if(!myargv[i+1])
+            {
+                Com_Error("Option -i needs a directory");
+            }
+
+            if(strlen(myargv[i+1]) >= sizeof(ps_userdirectory) - 1)
+            {
+                Com_Error("Directory of option -i too long: %s", myargv[i+1]);
+            }
+
             sprintf(ps_userdirectory, "%s", myargv[++i]);
             tail = strlen(ps_userdirectory)-1;
 
-            if(ps_userdirectory[tail] != '\\')
+            if(tail >= 0 && ps_userdirectory[tail] != '\\')
             {
                 ps_userdirectory[tail+1] = '\\';
             }
@@ -123,6 +133,6 @@ int main(int argc, char **argv)
         M_DecompileMacro(myargv[1]);
     }
 
-    return 1;
+    return 0;
 }
 

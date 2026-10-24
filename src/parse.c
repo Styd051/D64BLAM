@@ -32,6 +32,7 @@ static void PS_ParseOuter(void);
 static int ps_loopline;
 static int ps_loopvalue;
 static dboolean ps_enterloop;
+static int ps_macro;
 
 char ps_userdirectory[256];
 
@@ -54,6 +55,7 @@ void PS_ParseIdentifier(void)
             if(current_identifier->has_args)
             {
                 int i;
+                dboolean closed = false;
 
                 SC_MustMatchToken(TK_LPAREN);
                 stack = &id_stack[id_stack_count];
@@ -61,18 +63,36 @@ void PS_ParseIdentifier(void)
                 for(i = 0; i < current_identifier->numargs; i++)
                 {
                     SC_Find();
+                    if(sc_parser->tokentype == TK_RPAREN)
+                    {
+                        break;
+                    }
+
                     SC_PushIdStack(current_identifier->argnames[i]);
 
                     SC_Find();
                     if(sc_parser->tokentype == TK_RPAREN)
                     {
                         SC_Find();
+                        closed = true;
                         break;
                     }
                     else
                     {
                         SC_MustMatchToken(TK_COMMA);
                     }
+                }
+
+                // as many values as the define has names
+                if(!closed && i == current_identifier->numargs)
+                {
+                    SC_Error("Too many arguments for %s (%i expected)",
+                        current_identifier->name, current_identifier->numargs);
+                }
+                else if(!closed || i + 1 < current_identifier->numargs)
+                {
+                    SC_Error("Too few arguments for %s (%i expected)",
+                        current_identifier->name, current_identifier->numargs);
                 }
             }
             else
@@ -97,11 +117,11 @@ void PS_ParseIdentifier(void)
 
             return;
         }
-        else if(sc_parser->stack != NULL || sc_parser->identifier != NULL)
+        else if(sc_parser->stack != NULL && sc_parser->identifier != NULL)
         {
             int i;
 
-            for(i = 0; i < current_identifier->numargs; i++)
+            for(i = 0; i < sc_parser->identifier->numargs; i++)
             {
                 if(!strcmp(sc_parser->token, sc_parser->stack[i].value))
                 {
@@ -183,6 +203,13 @@ static void PS_ParseInner(void)
             break;
         }
     }
+
+    // the end of the file before the } of the block
+    if(!sc_parser->isamacro && sc_parser->identifier == NULL &&
+        sc_parser->buffpos >= sc_parser->buffsize)
+    {
+        SC_Error("Unexpected end of file: missing } in macro %i", ps_macro);
+    }
 }
 
 //
@@ -214,6 +241,12 @@ static void PS_ParseOuter(void)
                         static char includepath[256];
 
                         SC_GetString();
+
+                        if(strlen(ps_userdirectory) + strlen(sc_stringbuffer) >= sizeof(includepath))
+                        {
+                            SC_Error("Include path too long: %s%s", ps_userdirectory, sc_stringbuffer);
+                        }
+
                         SC_PushParser();
 
                         sprintf(includepath, "%s%s",
@@ -243,7 +276,8 @@ static void PS_ParseOuter(void)
             break;
         case TK_MACRO:
             SC_ExpectNextToken(TK_NUMBER);
-            M_NewMacro(SC_GetNumber());
+            ps_macro = SC_GetNumber();
+            M_NewMacro(ps_macro);
             SC_ExpectNextToken(TK_LBRACK);
             PS_ParseInner();
             M_FinishMacro();

@@ -67,7 +67,7 @@ typedef struct identifier_s
 extern identifier_t identifier_cap;
 extern identifier_t *current_identifier;
 
-#define MAX_IDENTIFER_VALUE_LEN 16
+#define MAX_IDENTIFER_VALUE_LEN 64
 #define MAX_IDENTIFER_STACK_LEN 128
 
 typedef struct

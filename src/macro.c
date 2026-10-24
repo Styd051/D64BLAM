@@ -24,6 +24,7 @@
 #include "common.h"
 #include "macro.h"
 #include "parse.h"
+#include "script.h"
 
 macrodef_t macrodefs[MAX_MACRO_DEFS];
 macrodef_t *activemacro;
@@ -33,12 +34,28 @@ int m_activemacros;
 int m_totalactions;
 int m_currentline;
 
+static int m_currentmacro;
+static dboolean m_defined[MAX_MACRO_DEFS];
+
 //
 // M_NewMacro
 //
 
 void M_NewMacro(int id)
 {
+    if(id < 1 || id > MAX_MACRO_DEFS)
+    {
+        SC_Error("Macro %i is out of range (1 to %i)", id, MAX_MACRO_DEFS);
+    }
+
+    if(m_defined[id-1])
+    {
+        SC_Error("Macro %i is defined twice", id);
+    }
+
+    m_defined[id-1] = true;
+    m_currentmacro = id;
+
     activemacro = &macrodefs[id-1];
     macroaction = macrodefs[id-1].data;
     activemacro->actions = 0;
@@ -59,6 +76,27 @@ void M_AppendAction(int type, int tag)
     if(type == 248 || type == 250 || type == 251)
     {
         tag = 256 + (tag-1);
+
+        if(tag > 32767)
+        {
+            SC_Error("Macro %i of action %i is out of range", tag - 255, type);
+        }
+    }
+
+    if(activemacro->actions >= MAX_MACRO_DATA)
+    {
+        SC_Error("Macro %i has more than %i actions", m_currentmacro, MAX_MACRO_DATA);
+    }
+
+    if(m_totalactions >= 32767)
+    {
+        SC_Error("Too many actions in the script (32767 at most)");
+    }
+
+    // the number of a wait is 16 bits too
+    if(m_currentline > 32767)
+    {
+        SC_Error("Too many waits in macro %i", m_currentmacro);
     }
 
     macro = &macroaction[activemacro->actions++];
@@ -140,7 +178,9 @@ void M_Init(void)
     m_activemacros = 0;
     m_totalactions = 0;
     m_currentline = 0;
-    memset(macrodefs, 0, sizeof(macrodef_t) * MAX_MACRO_DATA);
+    m_currentmacro = 0;
+    memset(macrodefs, 0, sizeof(macrodefs));
+    memset(m_defined, 0, sizeof(m_defined));
 }
 
 typedef struct
@@ -411,6 +451,57 @@ static m_decmp_table_t decmp_table[MAX_LINE_SPECIALS] =
 };
 
 //
+// M_CheckMacroLump
+// The lump must hold all that its counts say
+//
+
+static dboolean M_CheckMacroLump(byte *buffer, int len)
+{
+    int nummacros;
+    int count;
+    int offset;
+    int i;
+
+    if(len < 4)
+    {
+        return false;
+    }
+
+    nummacros = (short)(buffer[0] | (buffer[1] << 8));
+
+    if(nummacros < 0)
+    {
+        return false;
+    }
+
+    offset = 4;
+
+    for(i = 0; i < nummacros; i++)
+    {
+        if(offset + 2 > len)
+        {
+            return false;
+        }
+
+        count = (short)(buffer[offset] | (buffer[offset+1] << 8));
+
+        if(count < 0)
+        {
+            return false;
+        }
+
+        offset += 2 + (count + 1) * (int)sizeof(macrodata_t);
+
+        if(offset > len)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+//
 // M_DecompileMacro
 //
 
@@ -423,9 +514,15 @@ void M_DecompileMacro(const char *file)
     int i;
     int j;
     int scriptline;
-    int scriptvar;
+    int scriptvar = 0;
 
     len = Com_ReadBinaryFile(file, &buffer);
+
+    if(!M_CheckMacroLump(buffer, len))
+    {
+        Com_Error("%s is not a valid MACROS lump", file);
+    }
+
     Com_Printf("--------Decompiling %s--------\n", file);
 
     nummacros = Com_Read16(buffer);
@@ -492,7 +589,7 @@ void M_DecompileMacro(const char *file)
                 {
                     if(data[x].special == 246)
                     {
-                        if(data[x-1].tag == line)
+                        if(x > 0 && data[x-1].tag == line)
                         {
                             enterloop = true;
                             exitloopline = data[x].id;
@@ -520,9 +617,9 @@ void M_DecompileMacro(const char *file)
                 tag -= 255;
             }
 
-            table = &decmp_table[spec];
+            table = (spec >= 0 && spec < MAX_LINE_SPECIALS) ? &decmp_table[spec] : NULL;
 
-            if(table->name == NULL)
+            if(table == NULL || table->name == NULL)
             {
                 Com_FPrintf("    %i : %i;\n", spec, tag);
             }

@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
+#include <errno.h>
 
 extern int myargc;
 extern char **myargv;
@@ -58,6 +59,13 @@ typedef unsigned long   dword;
     #include <io.h>
     #define strcasecmp  _stricmp
     #define strncasecmp _strnicmp
+    #if _MSC_VER < 1900
+        #define vsnprintf _vsnprintf
+    #endif
+#else
+    #include <strings.h>
+    #include <unistd.h>
+    #define _getcwd getcwd
 #endif
 
 #if defined(__GNUC__)

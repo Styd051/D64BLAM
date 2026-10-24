@@ -73,10 +73,11 @@ static void SC_DebugPrintf(const char *str, ...)
     }
     
     va_start(v, str);
-    vsprintf(buf, str,v);
+    vsnprintf(buf, sizeof(buf), str,v);
     va_end(v);
+    buf[sizeof(buf)-1] = 0;
 
-    fprintf(debugfile, buf);
+    fprintf(debugfile, "%s", buf);
 }
 
 //
@@ -86,6 +87,12 @@ static void SC_DebugPrintf(const char *str, ...)
 static void SC_PushNestedFilename(char *name)
 {
     SC_DebugPrintf("push nested file %s\n", name);
+
+    if(strlen(name) >= sizeof(sc_nested_filenames[0]))
+    {
+        Com_Error("File name too long: %s", name);
+    }
+
     strcpy(sc_nested_filenames[sc_num_nested_filenames++], name);
 }
 
@@ -172,8 +179,9 @@ void SC_Error(const char *msg, ...)
     va_list v;
     
     va_start(v,msg);
-    vsprintf(buf,msg,v);
+    vsnprintf(buf,sizeof(buf),msg,v);
     va_end(v);
+    buf[sizeof(buf)-1] = 0;
 
     Com_Error("%s : %s\n(line = %i, pos = %i)",
         SC_GetNestedFilename(),
@@ -253,13 +261,37 @@ static void SC_ClearToken(void)
 
 int SC_GetNumber(void)
 {
+    char *digits;
+    long value;
+
     SC_DebugPrintf("get number (%s)\n", sc_parser->token);
     if(sc_parser->tokentype != TK_NUMBER)
     {
         SC_Error("%s is not a number", sc_parser->token);
     }
 
-    return atoi(sc_parser->token);
+    // a minus sign maybe, then digits only (not "5-3")
+    digits = sc_parser->token;
+    if(*digits == '-')
+    {
+        digits++;
+    }
+
+    if(*digits == 0 || strspn(digits, "0123456789") != strlen(digits))
+    {
+        SC_Error("%s is not a number", sc_parser->token);
+    }
+
+    // every number of a macro lump is 16 bits
+    errno = 0;
+    value = strtol(sc_parser->token, NULL, 10);
+
+    if(errno == ERANGE || value < -32768 || value > 32767)
+    {
+        SC_Error("%s is out of range (-32768 to 32767)", sc_parser->token);
+    }
+
+    return (int)value;
 }
 
 //
@@ -269,7 +301,98 @@ int SC_GetNumber(void)
 void SC_GetString(void)
 {
     SC_ExpectNextToken(TK_STRING);
+
+    if(strlen(sc_parser->token) >= sizeof(sc_stringbuffer))
+    {
+        SC_Error("String too long (%i characters at most): \"%.32s...",
+            (int)sizeof(sc_stringbuffer) - 1, sc_parser->token);
+    }
+
     strcpy(sc_stringbuffer, sc_parser->token);
+}
+
+//
+// SC_GetConstant
+// A name defined as a number (#define TIME_1SEC 30), found where a number is expected
+//
+
+static void SC_GetConstant(void)
+{
+    char name[sizeof(sc_parser->token)];
+    char value[sizeof(sc_parser->token)];
+    int type;
+    int depth;
+    identifier_t *id;
+
+    strcpy(name, sc_parser->token);
+
+    for(depth = 0; sc_parser->tokentype == TK_IDENIFIER; depth++)
+    {
+        if(depth >= MAX_NESTED_PARSERS)
+        {
+            SC_Error("%s is defined by itself", name);
+        }
+
+        for(id = identifier_cap.next; id != &identifier_cap; id = id->next)
+        {
+            if(!strcmp(id->name, sc_parser->token))
+            {
+                break;
+            }
+        }
+
+        if(id == &identifier_cap || id->has_args)
+        {
+            break;
+        }
+
+        // the text of the define must be one word
+        SC_PushParser();
+
+        sc_parser->buffsize         = id->bufsize;
+        sc_parser->buffer           = id->buffer;
+        sc_parser->pointer_start    = sc_parser->buffer;
+        sc_parser->pointer_end      = sc_parser->buffer + sc_parser->buffsize;
+        sc_parser->linepos          = 1;
+        sc_parser->rowpos           = 1;
+        sc_parser->buffpos          = 0;
+        sc_parser->identifier       = id;
+        sc_parser->stack            = NULL;
+        sc_parser->tokentype        = TK_NONE;
+        sc_parser->isamacro         = false;
+        sc_parser->name             = "identifier";
+
+        type = TK_NONE;
+
+        if(SC_Find())
+        {
+            type = sc_parser->tokentype;
+            strcpy(value, sc_parser->token);
+
+            if(SC_Find())
+            {
+                type = TK_NONE;
+            }
+        }
+
+        SC_PopParser();
+
+        if(type == TK_NONE)
+        {
+            break;
+        }
+
+        memset(sc_parser->token, 0, sizeof(sc_parser->token));
+        strcpy(sc_parser->token, value);
+        sc_parser->tokentype = type;
+    }
+
+    if(sc_parser->tokentype != TK_NUMBER)
+    {
+        memset(sc_parser->token, 0, sizeof(sc_parser->token));
+        strcpy(sc_parser->token, name);
+        sc_parser->tokentype = TK_IDENIFIER;
+    }
 }
 
 //
@@ -280,6 +403,11 @@ void SC_MustMatchToken(int type)
 {
     SC_DebugPrintf("must match %i\n", type);
     SC_DebugPrintf("tokentype %i\n", sc_parser->tokentype);
+
+    if(type == TK_NUMBER && sc_parser->tokentype == TK_IDENIFIER)
+    {
+        SC_GetConstant();
+    }
 
     if(sc_parser->tokentype != type)
     {
@@ -377,8 +505,14 @@ static void SC_GetNumberToken(char initial)
     int c = initial;
     int i = 0;
 
-    while(sc_charcode[c] == CHAR_NUMBER)
+    while(sc_charcode[(byte)c] == CHAR_NUMBER)
     {
+        if(i >= (int)sizeof(sc_parser->token) - 1)
+        {
+            SC_Error("Number too long (%i characters at most): %.32s...",
+                (int)sizeof(sc_parser->token) - 1, sc_parser->token);
+        }
+
         sc_parser->token[i++] = c;
         c = SC_GetChar();
     }
@@ -400,8 +534,15 @@ static void SC_GetLetterToken(char initial)
     int c = initial;
     int i = 0;
 
-    while(sc_charcode[c] == CHAR_LETTER)
+    // after the first letter, a name may have digits (Floor_Raise24)
+    while(sc_charcode[(byte)c] == CHAR_LETTER || (c >= '0' && c <= '9'))
     {
+        if(i >= (int)sizeof(sc_parser->token) - 1)
+        {
+            SC_Error("Word too long (%i characters at most): %.32s...",
+                (int)sizeof(sc_parser->token) - 1, sc_parser->token);
+        }
+
         sc_parser->token[i++] = c;
         c = SC_GetChar();
     }
@@ -411,6 +552,18 @@ static void SC_GetLetterToken(char initial)
     SC_DebugPrintf("get letter (%s)\n", sc_parser->token);
 
     SC_Rewind();
+
+    // "macro1" is still "macro 1", as before names could have digits
+    if(i > 5 && !strncasecmp(sc_parser->token, "macro", 5) &&
+        strspn(sc_parser->token + 5, "0123456789") == (size_t)(i - 5))
+    {
+        while(i > 5)
+        {
+            sc_parser->token[--i] = 0;
+            SC_Rewind();
+        }
+    }
+
     SC_CheckKeywords();
     SC_CheckIdentifierArgs();
 }
@@ -470,12 +623,30 @@ static void SC_GetSymbolToken(char c)
 static void SC_GetStringToken(void)
 {
     int i = 0;
-    char c = SC_GetChar();
+    int line = sc_parser->linepos;
+    char c;
 
-    while(sc_charcode[c] != CHAR_QUOTE)
+    while(1)
     {
-        sc_parser->token[i++] = c;
+        if(sc_parser->buffpos >= sc_parser->buffsize)
+        {
+            SC_Error("Unterminated string, started at line %i", line);
+        }
+
         c = SC_GetChar();
+
+        if(sc_charcode[(byte)c] == CHAR_QUOTE)
+        {
+            break;
+        }
+
+        if(i >= (int)sizeof(sc_parser->token) - 1)
+        {
+            SC_Error("String too long (%i characters at most): \"%.32s...",
+                (int)sizeof(sc_parser->token) - 1, sc_parser->token);
+        }
+
+        sc_parser->token[i++] = c;
     }
 
     sc_parser->tokentype = TK_STRING;
@@ -491,6 +662,8 @@ int SC_Find(void)
 {
     char c = 0;
     int comment = COMMENT_NONE;
+    int commentline = 0;
+    dboolean infile = (!sc_parser->isamacro && sc_parser->identifier == NULL);
 
     SC_ClearToken();
 
@@ -510,6 +683,8 @@ int SC_Find(void)
                 }
                 else
                 {
+                    commentline = sc_parser->linepos;
+
                     if(gc == '*')
                     {
                         comment = COMMENT_MULTILINE;
@@ -578,6 +753,12 @@ int SC_Find(void)
         }
     }
 
+    // the end of a file inside a /* comment
+    if(comment == COMMENT_MULTILINE && infile)
+    {
+        SC_Error("Unterminated comment, started at line %i", commentline);
+    }
+
     return false;
 }
 
@@ -619,6 +800,12 @@ void SC_Rewind(void)
 
     sc_parser->rowpos--;
     sc_parser->buffpos--;
+
+    // a line end read again is counted again
+    if(sc_parser->buffer[sc_parser->buffpos] == '\n')
+    {
+        sc_parser->linepos--;
+    }
 }
 
 //
@@ -629,16 +816,29 @@ void SC_AddIdentifier(void)
 {
     identifier_t *id;
     int len;
+    int left;
+    int used;
+    int newlines;
+    int lastline;
     char *buffer;
     int row;
     int pos;
+    int line;
 
     id = (identifier_t*)Com_Alloc(sizeof(*id));
+
+    if(strlen(sc_parser->token) >= sizeof(id->name))
+    {
+        SC_Error("Name too long (%i characters at most): %.32s...",
+            (int)sizeof(id->name) - 1, sc_parser->token);
+    }
+
     strcpy(id->name, sc_parser->token);
     id->numargs = 0;
 
     row = sc_parser->rowpos;
     pos = sc_parser->buffpos;
+    line = sc_parser->linepos;
 
     SC_Find();
     if(sc_parser->tokentype == TK_LPAREN)
@@ -676,36 +876,78 @@ void SC_AddIdentifier(void)
     {
         sc_parser->rowpos = row;
         sc_parser->buffpos = pos;
+        sc_parser->linepos = line;
 
         id->has_args = false;
     }
 
+    // the text goes to the end of the line (a tab is part of it, as is the end of the file);
+    // a backslash goes on with the next line
     len = 0;
+    newlines = 0;
+    lastline = -1;
+    left = sc_parser->buffsize - sc_parser->buffpos;
     buffer = sc_parser->buffer + sc_parser->buffpos;
 
-    do
+    while(len < left && buffer[len] != '\r' && buffer[len] != '\n')
     {
         if(buffer[len] == '\\')
         {
-            buffer[len] = '\n';
-            while(buffer[len++] < ' ');
+            buffer[len++] = '\n';
+
+            while(len < left && (byte)buffer[len] < ' ')
+            {
+                if(buffer[len] == '\n')
+                {
+                    newlines++;
+                    lastline = len;
+                }
+
+                len++;
+            }
+
+            continue;
         }
 
-    } while(buffer[len++] >= ' ');
+        len++;
+    }
 
-    id->bufsize = len;
-    id->buffer = (char*)Com_Alloc(len);
-    strncpy(id->buffer, buffer, len);
+    // the end of the line is taken too
+    used = len;
 
-    id->buffer[len-1] = 127;
+    if(len < left)
+    {
+        if(buffer[len] == '\n')
+        {
+            newlines++;
+            lastline = len;
+        }
+
+        used++;
+    }
+
+    id->bufsize = len + 1;
+    id->buffer = (char*)Com_Alloc(len + 1);
+    memcpy(id->buffer, buffer, len);
+
+    id->buffer[len] = 127;
 
     identifier_cap.prev->next = id;
     id->next = &identifier_cap;
     id->prev = identifier_cap.prev;
     identifier_cap.prev = id;
 
-    sc_parser->rowpos += len;
-    sc_parser->buffpos += len;
+    sc_parser->buffpos += used;
+
+    if(newlines > 0)
+    {
+        sc_parser->linepos += newlines;
+        sc_parser->rowpos = used - lastline;
+    }
+    else
+    {
+        sc_parser->rowpos += used;
+    }
 
     SC_DebugPrintf("add identifier\n");
 }
@@ -752,9 +994,16 @@ void SC_PushIdStack(char *name)
         SC_Error("Stack overflowed\n");
     }
 
+    len = strlen(sc_parser->token);
+
+    if(len >= MAX_IDENTIFER_VALUE_LEN)
+    {
+        SC_Error("Argument %s too long (%i characters at most): %.32s...",
+            name, MAX_IDENTIFER_VALUE_LEN - 1, sc_parser->token);
+    }
+
     id_stack[id_stack_count].argname = name;
     id_stack[id_stack_count].token_type = sc_parser->tokentype;
-    len = strlen(sc_parser->token);
     memset(id_stack[id_stack_count].value, 0, MAX_IDENTIFER_VALUE_LEN);
     strncpy(id_stack[id_stack_count].value, sc_parser->token, len);
 
@@ -779,8 +1028,8 @@ static void SC_PopIdStack(identifier_t *id,
                 id->name);
         }
 
-        memset(id_stack[id_stack_count].value, 0, MAX_IDENTIFER_VALUE_LEN);
         id_stack_count--;
+        memset(id_stack[id_stack_count].value, 0, MAX_IDENTIFER_VALUE_LEN);
     }
 
     SC_DebugPrintf("pop id stack\n");
@@ -837,7 +1086,7 @@ void SC_Init(void)
     sc_numparsers = 0;
     identifier_cap.prev = identifier_cap.next  = &identifier_cap;
     id_stack_count = 0;
-    memset(id_stack, 0, sizeof(*id_stack));
+    memset(id_stack, 0, sizeof(id_stack));
 
     for(i = 0; i < 256; i++)
     {

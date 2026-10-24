@@ -1,11 +1,17 @@
-cmake_minimum_required(VERSION 2.6)
-project(BLAM)
+cmake_minimum_required(VERSION 3.10)
+project(BLAM C)
+
+include_directories(include)
+
+if(MSVC)
+	add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+endif()
 
 add_executable(BLAM
-	common.c
-	macro.c
-	main.c
-	parse.c
-	script.c
+	src/common.c
+	src/macro.c
+	src/main.c
+	src/parse.c
+	src/script.c
 )
 

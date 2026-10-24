@@ -24,7 +24,7 @@
 #define __BLAM_MACRO__
 
 #define MAX_MACRO_DATA  255
-#define MAX_MACRO_DEFS  255
+#define MAX_MACRO_DEFS  256 // line specials 256 to 511
 
 typedef struct
 {

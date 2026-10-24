@@ -37,8 +37,9 @@ void Com_Printf(char* s, ...)
     va_list v;
     
     va_start(v,s);
-    vsprintf(msg,s,v);
+    vsnprintf(msg,sizeof(msg),s,v);
     va_end(v);
+    msg[sizeof(msg)-1] = 0;
     
     printf("%s\n", msg);
 }
@@ -49,18 +50,28 @@ void Com_Printf(char* s, ...)
 
 void Com_Error(char *fmt, ...)
 {
+    static dboolean inerror = false;
     va_list	va;
     char buff[1024];
     
+    // the error file itself could not be written
+    if(inerror)
+    {
+        exit(1);
+    }
+
+    inerror = true;
+
     va_start(va, fmt);
-    vsprintf(buff, fmt, va);
+    vsnprintf(buff, sizeof(buff), fmt, va);
     va_end(va);
+    buff[sizeof(buff)-1] = 0;
     Com_Printf("\n**************************\n");
     Com_Printf("ERROR: %s\n", buff);
     Com_Printf("**************************\n");
 
     Com_SetWriteFile("blam_err.txt");
-    Com_FPrintf(buff);
+    Com_FPrintf("%s", buff);
     Com_CloseFile();
 
     exit(1);
@@ -134,8 +145,9 @@ static char *va(char *str, ...)
     static char vastr[1024];
 	
     va_start(v, str);
-    vsprintf(vastr, str,v);
+    vsnprintf(vastr, sizeof(vastr), str,v);
     va_end(v);
+    vastr[sizeof(vastr)-1] = 0;
     
     return vastr;	
 }
@@ -198,7 +210,8 @@ int Com_ReadBinaryFile(const char* name, byte** buffer)
         length = ftell(fp);
         fseek(fp, 0, SEEK_SET);
 
-        *buffer = Com_Alloc(length);
+        // one zero byte after the data, for the tokenizer that looks one character ahead
+        *buffer = Com_Alloc(length + 1);
       
         if(fread(*buffer, 1, length, fp) == length)
         {
@@ -225,8 +238,9 @@ dboolean Com_SetWriteFile(char const* name, ...)
     va_list v;
     
     va_start(v, name);
-    vsprintf(filename, name, v);
+    vsnprintf(filename, sizeof(filename), name, v);
     va_end(v);
+    filename[sizeof(filename)-1] = 0;
 
     errno = 0;
 
@@ -252,8 +266,9 @@ dboolean Com_SetWriteBinaryFile(char const* name, ...)
     va_list v;
     
     va_start(v, name);
-    vsprintf(filename, name, v);
+    vsnprintf(filename, sizeof(filename), name, v);
     va_end(v);
+    filename[sizeof(filename)-1] = 0;
 
     errno = 0;
 
@@ -371,10 +386,11 @@ void Com_FPrintf(char* s, ...)
     va_list v;
     
     va_start(v,s);
-    vsprintf(msg,s,v);
+    vsnprintf(msg,sizeof(msg),s,v);
     va_end(v);
+    msg[sizeof(msg)-1] = 0;
 
-    fprintf(com_file, msg);
+    fprintf(com_file, "%s", msg);
 }
 
 //
